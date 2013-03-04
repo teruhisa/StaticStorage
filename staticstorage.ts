@@ -16,7 +16,7 @@ interface ISyncIO {
  * value = the actual value stored
  * id2time = mapping from id to the timestamp
  */
-class TimeBasedStorage {
+class TimeBasedStorages {
     constructor (private io: ISyncIO, private pageSize = 8, private ns = "tbs_", private token = ":") {}
     private page(pageNum: number): string[] {
         var pages, pageId;
@@ -47,7 +47,7 @@ class TimeBasedStorage {
     private getPage(pageId: string):string[] {
         return this.getValue("page_" + pageId).split(this.token);
     }
-    store(id: string, value: string):void {
+    set(id: string, value: string):void {
         var pages, page, pageId, pagestr, timestamp;
         pages = this.getPages();
         pageId = pages[0];
@@ -58,19 +58,50 @@ class TimeBasedStorage {
         } else {
             pageId = timestamp;
             pagestr = timestamp;
-            this.setValue("pages_" + timestamp, timestamp + this.token + pages.join(this.token));
+            this.setValue("pages", timestamp + this.token + pages.join(this.token));
         }
         this.setValue("value_" + timestamp, value);
         this.setValue("page_" + pageId, pagestr);
         this.setValue("id2time_" + id, timestamp);
     }
     get(id: string): string {
-        var timestamp, pages, pageId;
-        timestamp = parseInt(this.setValue("id2time_" + id));
+        var timestamp, pages, pageId, page, updatepage = [], tmpid, value = null;
+        // map the id to timestamp
+        timestamp = parseInt(this.getValue("id2time_" + id));
+        // iterate over the page blocks
         pages = this.getPages();
         for (var i = 0; i < pages.length; i++) {
             pageId = parseInt(pages[i]);
-            if (pageId)
+            // trace till we find the block with a timestamp thats older
+            if (pageId <= timestamp) {
+                // get the value
+                value = this.getValue("value_" + timestamp); 
+                // remove marker from the page block
+                page = this.getPage(pageId);
+                for (var j = 0; j < page.length; j++) {
+                    tmpid = page[j];
+                    if (tmpid !== timestamp) {
+                        updatepage.push(tmpid);
+                    }
+                }
+                if (updatepage.length > 0) {
+                    // remove it from the current page block
+                    this.setValue("page_" + pageId, updatepage.join(this.token));                    
+                } else {
+                    // clear page block and remove it from the page list
+                    this.setValue("page_" + pageId, undefined);
+                    this.setValue("pages", pages.filter(function(p){
+                        return p !== pageId;
+                    }).join(this.token)); // not using splice b/c you'll mutate the state of the iterator
+                }
+                // reset other data
+                this.setValue("value_" + timestamp, undefined);
+                this.setValue("id2time_" + id, undefined);
+
+                // we are done
+                break;
+            }
         }
+        return value;
     }
 }
