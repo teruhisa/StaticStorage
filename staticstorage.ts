@@ -1,9 +1,10 @@
-interface ICallbackType {
-    (...args:any[]);
-}
-interface ISyncIO {
+// interface ICallbackType {
+//     (...args:any[]);
+// }
+
+export interface ISyncIO {
     set(key:string, value:string):void;
-    get(value:string):string;   
+    get(value:string):string;
 }
 
 /* Note:
@@ -16,8 +17,11 @@ interface ISyncIO {
  * value = the actual value stored
  * id2time = mapping from id to the timestamp
  */
-class TimeBasedStorages {
-    constructor (private io: ISyncIO, private pageSize = 8, private ns = "tbs_", private token = ":") {}
+export class TimeBasedStorage {
+    lasttime: number;
+    constructor (private io: ISyncIO, private pageSize = 8, private ns = "tbs_", private token = ":") {
+        this.lasttime = 0;
+    }
     private page(pageNum: number): string[] {
         var pages, pageId;
         pages = this.getPages();
@@ -30,9 +34,8 @@ class TimeBasedStorages {
             value = this.io.get(this.ns + key);
         } catch (e) {
             console.error(e);
-            value = "";
         }
-        return value;
+        return value || "";
     }
     private setValue(key: string, value: string):void {
         try {
@@ -42,10 +45,22 @@ class TimeBasedStorages {
         }
     }
     private getPages():string[] {
-        return this.getValue("pages").split(this.token);
+        var pagesstr = this.getValue("pages"), pages;
+        if (pagesstr !== "") {
+            pages = pagesstr.split(this.token);
+        } else {
+            pages = [];
+        }
+        return pages;
     }
     private getPage(pageId: string):string[] {
-        return this.getValue("page_" + pageId).split(this.token);
+        var pagestr = this.getValue("page_" + pageId), page;
+        if (pagestr !== "") {
+            page = pagestr.split(this.token);
+        } else {
+            page = [];
+        }
+        return page;
     }
     set(id: string, value: string):void {
         var pages, page, pageId, pagestr, timestamp;
@@ -53,13 +68,22 @@ class TimeBasedStorages {
         pageId = pages[0];
         page = this.getPage(pageId);
         timestamp = (new Date()).getTime();
-        if (page.length < this.pageSize) {
+        // avoid duplicate timestamp
+        if (this.lasttime >= timestamp) {
+            timestamp = this.lasttime + 1;
+        }
+        this.lasttime = timestamp;
+        timestamp = "" + timestamp;
+        // do we have a page available?
+        if (page.length > 0 && page.length < this.pageSize) {
             pagestr = timestamp + this.token + page.join(this.token);
-        } else {
+        } else { // create a new page
             pageId = timestamp;
             pagestr = timestamp;
-            this.setValue("pages", timestamp + this.token + pages.join(this.token));
+            pages.unshift(timestamp);
+            this.setValue("pages", pages.join(this.token));
         }
+        // set the markers and values
         this.setValue("value_" + timestamp, value);
         this.setValue("page_" + pageId, pagestr);
         this.setValue("id2time_" + id, timestamp);
@@ -69,24 +93,26 @@ class TimeBasedStorages {
         // map the id to timestamp
         timestamp = parseInt(this.getValue("id2time_" + id));
         // iterate over the page blocks
-        pages = this.getPages();
+        pages = this.getPages().map(function(p) {
+            return parseInt(p);
+        });
         for (var i = 0; i < pages.length; i++) {
-            pageId = parseInt(pages[i]);
+            pageId = pages[i];
             // trace till we find the block with a timestamp thats older
             if (pageId <= timestamp) {
                 // get the value
-                value = this.getValue("value_" + timestamp); 
+                value = this.getValue("value_" + timestamp);
                 // remove marker from the page block
                 page = this.getPage(pageId);
                 for (var j = 0; j < page.length; j++) {
-                    tmpid = page[j];
+                    tmpid = parseInt(page[j]);
                     if (tmpid !== timestamp) {
                         updatepage.push(tmpid);
                     }
                 }
                 if (updatepage.length > 0) {
                     // remove it from the current page block
-                    this.setValue("page_" + pageId, updatepage.join(this.token));                    
+                    this.setValue("page_" + pageId, updatepage.join(this.token));
                 } else {
                     // clear page block and remove it from the page list
                     this.setValue("page_" + pageId, undefined);
